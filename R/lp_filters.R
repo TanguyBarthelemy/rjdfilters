@@ -1,32 +1,31 @@
-#' @include procresults.R
 #' @import rJava
 NULL
 
-#' Apply Henderson linear filter
+#' Apply Henderson Linear Filter
 #'
-#' @param y input time-series?
+#' @param x input time-series.
 #' @param length length of the Henderson filter.
 #' @param musgrave boolean indicating if musgrave asymmetric filters should be used.
 #' @param ic ic ratio.
 #'
 #' @return the target signal.
 #' @examples
-#' y <- retailsa$AllOtherGenMerchandiseStores
-#' trend <- henderson(y, length = 13)
-#' plot(y)
+#' x <- retailsa$AllOtherGenMerchandiseStores
+#' trend <- henderson(x, length = 13)
+#' plot(x)
 #' lines(trend, col = "red")
 #' @importFrom stats is.ts na.omit start
 #' @export
-henderson<-function(y, length, musgrave=TRUE, ic=4.5){
+henderson<-function(x, length, musgrave=TRUE, ic=4.5){
   result <- .jcall("jdplus/experimentalsa/base/r/X11Decomposition", "[D", "henderson",
-                   as.numeric(y), as.integer(length), musgrave, ic)
+                   as.numeric(x), as.integer(length), musgrave, ic)
 
-  if(is.ts(y))
-    result <- ts(result,start = start(y), frequency = frequency(y))
+  if(is.ts(x))
+    result <- ts(result,start = start(x), frequency = frequency(x))
   result
 }
 
-#' Apply local polynomials filters
+#' Apply Local Polynomials Filters
 #'
 #' @inheritParams henderson
 #' @param horizon horizon (bandwidth) of the symmetric filter.
@@ -38,14 +37,14 @@ henderson<-function(y, length, musgrave=TRUE, ic=4.5){
 #'
 #' @return the target signal
 #' @examples
-#' y <- retailsa$AllOtherGenMerchandiseStores
-#' trend <- localpolynomials(y, horizon = 6)
-#' plot(y)
+#' x <- retailsa$AllOtherGenMerchandiseStores
+#' trend <- localpolynomials(x, horizon = 6)
+#' plot(x)
 #' lines(trend, col = "red")
 #' @references Proietti, Tommaso and Alessandra Luati (2008). “Real time estimation in local polynomial regression, with application to trend-cycle analysis”.
 #' @seealso \code{\link{lp_filter}}
 #' @export
-localpolynomials<-function(y,
+localpolynomials<-function(x,
                            horizon = 6,
                            degree = 3,
                            kernel = c("Henderson", "Uniform", "Biweight", "Trapezoidal", "Triweight", "Tricube", "Gaussian", "Triangular", "Parabolic"),
@@ -59,14 +58,14 @@ localpolynomials<-function(y,
   kernel=match.arg(kernel)
   endpoints=match.arg(endpoints)
   result <- .jcall("jdplus/experimentalsa/base/r/LocalPolynomialFilters", "[D", "filter",
-                   as.numeric(y), as.integer(horizon), as.integer(degree), kernel, endpoints, d
-                   , tweight, passband)
-  if(is.ts(y))
-    result <- ts(result,start = start(y), frequency = frequency(y))
+                   as.numeric(x), as.integer(horizon), as.integer(degree), kernel, endpoints, d,
+                   tweight, passband)
+  if(is.ts(x))
+    result <- ts(result,start = start(x), frequency = frequency(x))
   result
 }
 
-#' Get properties of local polynomials filters
+#' Local Polynomials Filters
 #'
 #' @inheritParams localpolynomials
 #' @details
@@ -107,8 +106,7 @@ lp_filter <- function(horizon = 6, degree = 3,
                  as.integer(degree), kernel, endpoints, d,
                  tweight, passband)
 
-  return(structure(FiniteFilters2R(jprops, horizon),
-  class=c("lp_filter", "FiniteFilters")))
+  return(.jd2r_finitefilters(jprops, first_to_last = FALSE))
 }
 coefficients_names <- function(lb, ub){
   x <- sprintf("t%+i", seq(lb,ub))

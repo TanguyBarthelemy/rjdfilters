@@ -5,15 +5,17 @@ setClass("finite_filters",
 )
 #' Manipulating Finite Filters
 #'
-#' @param sfilter the symmetric filter or a `"FiniteFilter` object.
+#' @param sfilter the symmetric filter ([moving_average()] object) or
+#'  a `matrix` or `list` with all the coefficients.
 #' @param rfilters the right filters (used on the last points).
 #' @param lfilters the left filters (used on the first points).
 #' @param first_to_last boolean indicating if the first element of `rfilters` is the
 #' first asymmetric filter (when only one observation is missing) or the last one (real-time estimates).
+#' @param object `finite_filters` object.
 #'
 #' @examples
-#' ff_lp = finite_filters(lp_filter())
-#' ff_simple_ma = finite_filters(moving_average(c(1, 1, 1), lags = -1)/3,
+#' ff_lp <- lp_filter()
+#' ff_simple_ma <- finite_filters(moving_average(c(1, 1, 1), lags = -1)/3,
 #'                rfilters = list(moving_average(c(1, 1), lags = -1)/2))
 #' ff_lp
 #' ff_simple_ma
@@ -42,14 +44,7 @@ finite_filters.moving_average <- function(sfilter,
     }
     rfilters = rev(lapply(lfilters, rev.moving_average))
   } else if (is.null(lfilters) & is.null(rfilters)) {
-    rfilters = rep(list(sfilter), abs(upper_bound(sfilter)))
-    # rfilters = lapply(seq_along(rfilters), function(i) {
-    #   rfilters[[i]] * moving_average(1, lags = -i)
-    # })
-    lfilters = rep(list(sfilter), abs(lower_bound(sfilter)))
-    # lfilters = lapply(seq_along(lfilters), function(i) {
-    #   lfilters[[i]] * moving_average(1, lags = i)
-    # })
+    rfilters = lfilters = list()
 
   }
   res <- new("finite_filters",
@@ -57,61 +52,79 @@ finite_filters.moving_average <- function(sfilter,
              rfilters = rfilters)
   res
 }
+
 #' @export
-finite_filters.FiniteFilters <- function(sfilter,
-                                         rfilters = NULL,
-                                         lfilters = NULL,
-                                         first_to_last = FALSE){
-  all_f = sfilter$filters.coef
-  lags = -(nrow(all_f) - 1)/2
-  all_f = lapply(rev(seq_len(ncol(all_f))), function(i) {
-    moving_average(all_f[,i], lags, trailing_zero = TRUE)
-  })
-  sfilter = all_f[[1]]
-  rfilters = all_f[-1]
-  lfilters = rev(lapply(rfilters, rev.moving_average))
-  res <- new("finite_filters",
-             sfilter = sfilter, lfilters = lfilters,
-             rfilters = rfilters)
-  res
+finite_filters.list <- function(sfilter,
+                                rfilters = NULL,
+                                lfilters = NULL,
+                                first_to_last = FALSE){
+  lags <- length(sfilter)-1
+
+  all_f <- lapply(sfilter,
+                   function(x){
+                     moving_average(rm_trailing_zero_or_na(x), -lags)
+                   }
+  )
+  if (first_to_last)
+    all_f <- rev(all_f)
+  sfilter <- all_f[[1]]
+  rfilters <- all_f[-1]
+  finite_filters(sfilter = sfilter, rfilters = rfilters)
 }
-jd2finitefilters <- function(jf){
-  jsfilter <- .jcall(jf, "Ljdplus/toolkit/base/core/math/linearfilters/SymmetricFilter;", "symmetricFilter")
-  jlfilter <- .jcall(jf, "[Ljdplus/toolkit/base/core/math/linearfilters/IFiniteFilter;", "leftEndPointsFilters")
-  jrfilter <- .jcall(jf, "[Ljdplus/toolkit/base/core/math/linearfilters/IFiniteFilter;", "rightEndPointsFilters")
-  finite_filters(jd2ma(jsfilter),
-                 rfilter = lapply(jrfilter, jd2ma),
-                 lfilter = rev(lapply(jlfilter, jd2ma)))
-}
-#' @rdname finite_filters
 #' @export
-# e1 = finite_filters(moving_average(c(1/3,1/3, 1/3), -1), rfilters = list(moving_average(c(1/2, 1/2), -1)))
-# e2 = moving_average(c(1/3,1/3, 1/3), -1)
-# e1 = finite_filters(moving_average(rep(1,5), -2)/5,
-#                     rfilters = list(moving_average(rep(1,4), -2)/4,
-#                                     moving_average(rep(1,3), -2)/3))
+finite_filters.matrix <- function(sfilter,
+                                  rfilters = NULL,
+                                  lfilters = NULL,
+                                  first_to_last = FALSE){
+  coefs <- lapply(1:ncol(sfilter), function(i) sfilter[,i])
+  finite_filters(coefs, first_to_last = first_to_last)
+}
+.jd2r_finitefilters <- function(jf, first_to_last = TRUE){
+  if (.jinstanceof(jf, "jdplus/experimentalsa/base/core/x11plus/X11SeasonalFiltersFactory$AnyFilter")) {
+    jsfilter <- .jcall(jf, "Ljdplus/toolkit/base/core/math/linearfilters/SymmetricFilter;", "symmetricFilter")
+    jlfilter <- .jcall(jf, "[Ljdplus/toolkit/base/core/math/linearfilters/IFiniteFilter;", "leftEndPointsFilters")
+    jrfilter <- .jcall(jf, "[Ljdplus/toolkit/base/core/math/linearfilters/IFiniteFilter;", "rightEndPointsFilters")
+
+    sfilter = .jd2ma(jsfilter)
+    rfilters = lapply(jrfilter, .jd2ma)
+    lfilters = rev(lapply(jlfilter, .jd2ma))
+  } else if (.jinstanceof(jf, "jdplus/experimentalsa/base/r/FiltersToolkit$FiniteFilters")) {
+    jsfilter <- .jcall(jf, "Ljdplus/toolkit/base/core/math/linearfilters/SymmetricFilter;", "getFilter")
+    jrfilter <- .jcall(jf, "[Ljdplus/toolkit/base/core/math/linearfilters/IFiniteFilter;", "getAfilters")
+    if (!first_to_last) # lp_filter
+      jrfilter <- rev(jrfilter)
+
+    while (is.jnull(jrfilter[[length(jrfilter)]])) { # DFA
+      jrfilter <- jrfilter[-length(jrfilter)]
+    }
+    sfilter <- .jd2ma(jsfilter)
+    rfilters <- lapply(jrfilter, .jd2ma)
+    lfilters <- NULL
+  } else if (.jinstanceof(jf, "jdplus/experimentalsa/base/core/filters/Filtering")) {
+    jsfilter <- .jcall(jf, "Ljdplus/toolkit/base/core/math/linearfilters/IFiniteFilter;", "centralFilter")
+    jrfilter <- .jcall(jf, "[Ljdplus/toolkit/base/core/math/linearfilters/IFiniteFilter;", "rightEndPointsFilters")
+
+    sfilter <- .jd2ma(jsfilter)
+    rfilters <- lapply(jrfilter, .jd2ma)
+    lfilters <- NULL
+  }
+  finite_filters(sfilter = sfilter,
+                 rfilters = rfilters,
+                 lfilters = lfilters)
+}
+#' @rdname filters_operations
+#' @export
 setMethod("*",
           signature(e1 = "finite_filters",
                     e2 = "moving_average"),
           function(e1, e2) {
             sym <- e1@sfilter * e2
             rfilters <- lapply(e1@rfilters, `*`, e2)
-            # rfilters <- c(rfilters,
-            #               lapply(rev(seq_len(upper_bound(sym) - length(rfilters))), function(i){
-            #                 moving_average(NA, lags = i - 1)
-            #               })
-            # )
             lfilters <- lapply(e1@lfilters, `*`, e2)
-            # lfilters <- c(lapply(rev(seq_len(abs(length(lfilters) + lower_bound(sym)))),
-            #                      function(i){
-            #                 moving_average(NA, lags = -(i - 1))
-            #               }),
-            #               lfilters
-            #               )
 
             finite_filters(sfilter = sym, rfilters = rfilters, lfilters = lfilters)
           })
-#' @rdname finite_filters
+#' @rdname filters_operations
 #' @export
 setMethod("*",
           signature(e1 = "moving_average",
@@ -157,29 +170,8 @@ setMethod("*",
             })
             finite_filters(sfilter = sym, rfilters = rfilters, lfilters = lfilters)
 
-            # s_1_norm = imput_last_obs(res, n = 6, nperiod = 1)
-            # s_1_demean = s_1 - s_1_norm
-            # s_1_f = imput_last_obs(s_1_demean, n = 6, nperiod = 12)
-            # compare(s_1_f * y, "b5")
-            # all_f <- c(e2@lfilters,
-            #            rep(list(e2@sfilter), length(e1)),
-            #            e2@rfilters)
-            # e1_l <- as.list(e1)
-            # new_f <-
-            #   lapply(seq(1 + abs(lower_bound(e1)),
-            #              length(all_f) - upper_bound(e1)),
-            #          function(i) {
-            #            multiplied_l <- mapply(`*`, all_f[seq(i + lower_bound(e1),
-            #                                                  i + upper_bound(e1))], lapply(e1_l, function(x) x))
-            #            Reduce(`+`, multiplied_l)
-            #          })
-            # sym_i <- (length(new_f) - 1)/2 + 1
-            # lfilters <- new_f[seq(1, sym_i - 1)]
-            # sfilter <- new_f[[sym_i]]
-            # rfilters <- new_f[seq(sym_i + 1, length(new_f))]
-            # finite_filters(sfilter = sfilter, rfilters = rfilters, lfilters = lfilters)
           })
-#' @rdname finite_filters
+#' @rdname filters_operations
 #' @export
 setMethod("*",
           signature(e1 = "finite_filters",
@@ -188,18 +180,18 @@ setMethod("*",
             if (length(e2) == 1) {
               e1 * moving_average(e2,0)
             } else {
-              jfilter(e2, e1)
+              filter(e2, e1)
             }
           })
-#' @rdname finite_filters
+#' @rdname filters_operations
 #' @export
 setMethod("*",
           signature(e1 = "ANY",
                     e2 = "finite_filters"),
           function(e1, e2) {
-            jfilter(e1, e2)
+            filter(e1, e2)
           })
-#' @rdname finite_filters
+#' @rdname filters_operations
 #' @export
 setMethod("*",
           signature(e1 = "finite_filters",
@@ -207,7 +199,7 @@ setMethod("*",
           function(e1, e2) {
             e2 * e1
           })
-#' @rdname finite_filters
+#' @rdname filters_operations
 #' @export
 setMethod("+",
           signature(e1 = "numeric",
@@ -215,7 +207,7 @@ setMethod("+",
           function(e1, e2) {
             e2 + e1
           })
-#' @rdname finite_filters
+#' @rdname filters_operations
 #' @export
 setMethod("+",
           signature(e1 = "finite_filters",
@@ -226,7 +218,7 @@ setMethod("+",
             e1@rfilters = lapply(e1@rfilters, `+`, e2)
             e1
           })
-#' @rdname finite_filters
+#' @rdname filters_operations
 #' @export
 setMethod("+",
           signature(e1 = "moving_average",
@@ -234,10 +226,10 @@ setMethod("+",
           function(e1, e2) {
             e2 + e1
           })
-#' @rdname finite_filters
+#' @rdname filters_operations
 #' @export
 setMethod("+", signature(e1 = "finite_filters", e2 = "missing"), function(e1,e2) e1)
-#' @rdname finite_filters
+#' @rdname filters_operations
 #' @export
 setMethod("-",
           signature(e1 = "finite_filters",
@@ -248,7 +240,7 @@ setMethod("-",
             e1@rfilters = lapply(e1@rfilters, `-`)
             e1
           })
-#' @rdname finite_filters
+#' @rdname filters_operations
 #' @export
 setMethod("-",
           signature(e1 = "finite_filters",
@@ -259,7 +251,7 @@ setMethod("-",
             e1@rfilters = lapply(e1@rfilters, `-`, e2)
             e1
           })
-#' @rdname finite_filters
+#' @rdname filters_operations
 #' @export
 setMethod("-",
           signature(e1 = "moving_average",
@@ -267,7 +259,7 @@ setMethod("-",
           function(e1, e2) {
             e1 + (- e2)
           })
-#' @rdname finite_filters
+#' @rdname filters_operations
 #' @export
 setMethod("-",
           signature(e1 = "finite_filters",
@@ -275,7 +267,7 @@ setMethod("-",
           function(e1, e2) {
             e1 - moving_average(e2,0)
           })
-#' @rdname finite_filters
+#' @rdname filters_operations
 #' @export
 setMethod("-",
           signature(e1 = "numeric",
@@ -284,7 +276,7 @@ setMethod("-",
             moving_average(e1,0) - e2
           })
 
-#' @rdname finite_filters
+#' @rdname filters_operations
 #' @export
 setMethod("/",
           signature(e1 = "finite_filters",
@@ -297,22 +289,28 @@ setMethod("/",
           })
 #' @method as.matrix finite_filters
 #' @export
-as.matrix.finite_filters <- function(x, rfilters = TRUE, lfilters = FALSE, ...) {
-  rfilters_s <- lfilters_s <-
-    index_r <- index_l <- NULL
-  index_sym = length(x@rfilters)
+as.matrix.finite_filters <- function(x, sfilter = TRUE, rfilters = TRUE, lfilters = FALSE, ...) {
+  sfilter_s <- rfilters_s <- lfilters_s <-
+    index_s <- index_r <- index_l <- NULL
+  if (!any(sfilter, rfilters, lfilters))
+    return (NULL)
+  if (sfilter) {
+    sfilter_s <- list(x@sfilter)
+    index_s <- length(x@rfilters)
+  }
   if (lfilters) {
     lfilters_s <- x@lfilters
-    index_l = seq(0, -(length(x@lfilters) - 1))
+    index_l <- seq(0, -(length(x@lfilters) - 1))
   }
   if (rfilters) {
     rfilters_s <- x@rfilters
-    index_r = seq(length(x@rfilters) - 1, 0)
+    index_r <- seq(length(x@rfilters) - 1, 0)
   }
-  mat = do.call(cbind, c(lfilters_s, list(x@sfilter), rfilters_s))
-  colnames(mat) <- sprintf("q=%i", c(index_l, index_sym, index_r))
+  mat <- do.call(cbind, c(lfilters_s, sfilter_s, rfilters_s))
+  colnames(mat) <- sprintf("q=%i", c(index_l, index_s, index_r))
   mat
 }
+#' @rdname filters_operations
 #' @export
 setMethod("^",
           signature(e1 = "finite_filters",
@@ -320,7 +318,7 @@ setMethod("^",
           function(e1, e2) {
             Reduce(`*`, rep(list(e1), e2))
           })
-#' @rdname finite_filters
+#' @rdname filters_operations
 #' @export
 setMethod("*",
           signature(e1 = "finite_filters",
@@ -367,6 +365,7 @@ setMethod("*",
             })
             finite_filters(sfilter = sym, rfilters = rfilters, lfilters = lfilters)
           })
+#' @rdname filters_operations
 #' @export
 setMethod("+",
           signature(e1 = "finite_filters",
@@ -409,6 +408,7 @@ setMethod("+",
             rfilters <- mapply(`+`, e1_rfilters_f, e2_rfilters_f)
             finite_filters(sfilter = sfilter, rfilters = rfilters, lfilters = lfilters)
           })
+#' @rdname filters_operations
 #' @export
 setMethod("-",
           signature(e1 = "finite_filters",
@@ -416,44 +416,115 @@ setMethod("-",
           function(e1, e2) {
             e1 + (-e2)
           })
+#' @rdname filters_operations
+#' @export
+setMethod("[",
+          signature(x = "finite_filters",
+                    i = "missing",
+                    j = "ANY"),
+          function(x, i, j, ..., drop = TRUE) {
+            res <- c(list(x@sfilter), x@rfilters)
+            names(res) <- sprintf("q=%i", seq(length(res) - 1, by = -1, length.out = length(res)))
+            res <- res[j]
+            if (length(res) == 1 & drop) {
+              res <- res[[1]]
+            }
+            res
+          })
+#' @rdname filters_operations
+#' @export
+setMethod("[",
+          signature(x = "finite_filters",
+                    i = "ANY",
+                    j = "ANY"),
+          function(x, i, j, ..., drop = TRUE) {
+            as.matrix(x)[i, j, ..., drop = drop]
+          })
 #' @export
 to_seasonal.finite_filters <- function(x, s){
   x@sfilter = to_seasonal(x@sfilter, s)
   x@rfilters = unlist(lapply(x@rfilters, function(x){
     new_mm = to_seasonal(x, s)
     rep(list(new_mm), s)
-    # lapply(s:1, function(i){
-    #   new_mm * moving_average(1, lags = (i-1))
-    # })
   }))
   x@lfilters = unlist(lapply(x@lfilters, function(x){
     new_mm = to_seasonal(x, s)
-    # lapply(1:s, function(i){
-    #   new_mm * moving_average(1, lags = -(i-1))
-    # })
     rep(list(new_mm), s)
   }))
   x
 }
-#'@export
-imput_last_obs <- function(x, n, nperiod = 1) {
+
+#' Impute Incomplete Finite Filters
+#'
+#' @param x a [finite_filters()] object.
+#' @param n integer specifying the number of imputed periods.
+#' By default all the missing moving averages are imputed.
+#' @param nperiod integer specifying how to imput missing date.
+#' `nperiod = 1` means imputation using last filtered data (1 period backward),
+#' `nperiod = 12` with monthly data means imputation using last year filtered data, etc.
+#' @param backward,forward boolean indicating if the imputation should be done backward (on left filters), forward (on right filters).
+#'
+#' @details
+#' When combining finite filters and a moving average, the first and/or the last points cannot be computed.
+#'
+#' For example, using the M2X12 moving average (symmetric moving average with coefficients \eqn{\theta = \begin{pmatrix} 1/24 & 1/12 & 1/12 & 1/12 & 1/12 & 1/12 & 1/12 & 1/12 & 1/12 & 1/12 & 1/12 & 1/12 & 1/24 \end{pmatrix}}), the first and last 6 points cannot be computed.
+#'
+#' `impute_last_obs()` allows to impute the first/last points using the `nperiod` previous filtered data. With `nperiod = 1`, the last filtered data is used for the imputation, with `nperiod = 12` and monthly data, the last year filtered data is used for the imputation, etc.
+#'
+#'
+#' @examples
+#' y <- window(retailsa$AllOtherGenMerchandiseStores, start = 2008)
+#' M3X3 <- macurves("S3X3")
+#' M2X12 <- (simple_ma(12, -6) + simple_ma(12, -5)) / 2
+#' composite_ma <- M3X3 * M2X12
+#' # The last 6 points cannot be computed
+#' composite_ma
+#' composite_ma * y
+#' # they can be computed using the last filtered data
+#' # e.g. to impute the first 3 missing months with last period:
+#' impute_last_obs(composite_ma, n = 3, nperiod = 1) * y
+#' # or using the filtered data of the same month in previous year
+#' impute_last_obs(composite_ma, n = 6, nperiod = 12) * y
+#' @export
+impute_last_obs <- function(x, n, nperiod = 1, backward = TRUE, forward = TRUE) {
   nrfilters <- length(x@rfilters)
   nlfilters <- length(x@lfilters)
   if (missing(n))
     n <- max(nrfilters, nlfilters)
   n_r <- min(upper_bound(x@sfilter) - nrfilters, n)
   n_l <- min(abs(lower_bound(x@sfilter)) - nlfilters, n)
-  new_rfilters <- c(x@rfilters, vector("list", n_r))
-  new_lfilters <- c(vector("list", n_l), x@lfilters)
-  for (i in seq_len(n_r)) {
-    new_rfilters[[nrfilters + i]] <-
-      new_rfilters[[nrfilters + i - nperiod]] *
-      moving_average(1, lags = -nperiod)
+
+  if (backward) {
+    new_lfilters <- c(vector("list", n_l), x@lfilters)
+
+    for (i in rev(seq_len(n_l))) {
+      if (nperiod + i > length(new_lfilters)) {
+        modified_filter <- x@sfilter
+      } else {
+        modified_filter <- new_lfilters[[i + nperiod]]
+      }
+      new_lfilters[[i]] <-
+        modified_filter *
+        moving_average(1, lags = nperiod)
+    }
+  } else {
+    new_lfilters <- x@lfilters
   }
-  for (i in rev(seq_len(n_l))) {
-    new_lfilters[[i]] <-
-      new_lfilters[[i + nperiod]] *
-      moving_average(1, lags = nperiod)
+
+  if (forward) {
+    new_rfilters <- c(x@rfilters, vector("list", n_r))
+    for (i in seq_len(n_r)) {
+      if (nrfilters + i - nperiod < 1) {
+        modified_filter <- x@sfilter
+      } else {
+        modified_filter <- new_rfilters[[nrfilters + i - nperiod]]
+      }
+      new_rfilters[[nrfilters + i]] <-
+        modified_filter *
+        moving_average(1, lags = -nperiod)
+    }
+  } else {
+    new_rfilters <- x@rfilters
   }
   finite_filters(x@sfilter, rfilters = new_rfilters, lfilters = new_lfilters)
 }

@@ -29,7 +29,7 @@ or later version is required.
 # Install development version from GitHub
 # install.packages("remotes")
 remotes::install_github("rjdemetra/rjd3toolkit")
-remotes::install_github("rjdemetra/rj3dfilters")
+remotes::install_github("palatej/rjd3filters")
 ```
 
 ## Basic example
